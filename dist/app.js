@@ -86,6 +86,16 @@ function snapshotDroppedFiles(transfer){
  const listed=Array.from(transfer?.files||[]),items=Array.from(transfer?.items||[]).filter(item=>item.kind==='file').map(item=>item.getAsFile()).filter(Boolean);
  return items.length>listed.length?items:listed;
 }
+async function filesFromEntries(entries){
+ const files=[];
+ async function visit(entry){
+  if(entry.isFile){try{files.push(await new Promise((resolve,reject)=>entry.file(resolve,reject)))}catch{}return}
+  if(!entry.isDirectory)return;
+  const reader=entry.createReader();
+  try{while(true){const batch=await new Promise((resolve,reject)=>reader.readEntries(resolve,reject));if(!batch.length)break;for(const child of batch)await visit(child)}}catch{}
+ }
+ for(const entry of entries)await visit(entry);return files;
+}
 function addFiles(files,source='사진 추가'){
  const pendingFiles=Array.from(files||[]);
  const task=uploadQueue.then(()=>processPhotoFiles(pendingFiles,source));uploadQueue=task.catch(()=>{});return task;
@@ -121,19 +131,23 @@ async function processPhotoFiles(files,source){
  return {added,failed:errors.length,received:files.length};
 }
 function renderPhotos(){$('#photoCount').textContent=photos.length;$('#dropzone').style.minHeight=photos.length?'85px':'126px';$('#photoList').replaceChildren();photos.forEach((p,i)=>{let card=document.createElement('div');card.className='photocard';let im=document.createElement('img');im.src=p.data;im.alt=p.name;let t=document.createElement('div');t.className='name';t.textContent=`${i+1}. ${p.name}`;t.title=p.name;let actions=document.createElement('div');actions.className='actions';for(let [label,title,fn,disabled] of [['←','앞으로',()=>{[photos[i-1],photos[i]]=[photos[i],photos[i-1]]},i===0],['→','뒤로',()=>{[photos[i+1],photos[i]]=[photos[i],photos[i+1]]},i===photos.length-1],['×','삭제',()=>photos.splice(i,1),false]]){let b=document.createElement('button');b.textContent=label;b.title=title;b.disabled=disabled;b.onclick=()=>{fn();renderPhotos();render()};actions.append(b)}card.append(im,t,actions);$('#photoList').append(card)})}
-$('#addPhotos').onclick=()=>$('#fileInput').click();
-// Let the browser populate the native multiple-file input on drops in this area.
-$('#dropFileInput').onchange=ev=>{const files=Array.from(ev.target.files||[]);ev.target.value='';addFiles(files,'직접 등록')};
+$('#addPhotos').onclick=$('#dropzone').onclick=()=>$('#fileInput').click();
 $('#fileInput').onchange=ev=>{const files=Array.from(ev.target.files||[]);ev.target.value='';addFiles(files,'파일 선택')};
 $('#clearPhotos').onclick=async()=>{await uploadQueue;photos=[];page=0;mode='edit';$('#uploadStatus').textContent='';$('#uploadFailures').replaceChildren();renderPhotos();render()};
 function isFileDrag(ev){return Array.from(ev.dataTransfer?.types||[]).includes('Files')||Array.from(ev.dataTransfer?.items||[]).some(item=>item.kind==='file')}
-document.addEventListener('dragover',ev=>{if(!isFileDrag(ev))return;$('#dropzone').classList.add('over');if(ev.target===$('#dropFileInput'))return;ev.preventDefault();ev.dataTransfer.dropEffect='copy'});
+document.addEventListener('dragover',ev=>{if(!isFileDrag(ev))return;$('#dropzone').classList.add('over');ev.preventDefault();ev.dataTransfer.dropEffect='copy'});
 document.addEventListener('dragleave',ev=>{if(!ev.relatedTarget)$('#dropzone').classList.remove('over')});
-document.addEventListener('drop',ev=>{
+document.addEventListener('drop',async ev=>{
  $('#dropzone').classList.remove('over');
- if(ev.target===$('#dropFileInput'))return;
+ 
  if(!isFileDrag(ev)&&!ev.dataTransfer?.files?.length)return;
- ev.preventDefault();$('#dropzone').classList.remove('over');const files=snapshotDroppedFiles(ev.dataTransfer);addFiles(files,'드래그 등록');
+ ev.preventDefault();$('#dropzone').classList.remove('over');const transfer=ev.dataTransfer,listed=snapshotDroppedFiles(transfer);
+ // Snapshot entries before the browser clears its drag data store.
+ const entries=Array.from(transfer?.items||[]).map(item=>{try{return item.webkitGetAsEntry?.()}catch{return null}}).filter(Boolean);
+ const expanded=await filesFromEntries(entries);
+ const files=expanded.length>listed.length?expanded:listed;
+ await addFiles(files,'드래그 등록');
+ if(files.length===1){const note=document.createElement('li');note.textContent='브라우저에서 파일 1개만 전달되었습니다. 여러 개를 선택했다면 사진 추가 버튼으로 등록해 주세요. (업로드 v10)';$('#uploadFailures').append(note)}
 });
 
 async function handleImagePaste(ev){
