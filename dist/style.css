@@ -14,3 +14,5 @@
 
 
 input[hidden]{display:none!important}#uploadStatus{font-size:11px;color:var(--teal);line-height:1.6;margin-top:12px}#uploadStatus:empty,#uploadFailures:empty{display:none}#uploadFailures{font-size:11px;color:#b34a3f;line-height:1.6;padding-left:18px;margin:8px 0}
+
+#dropzone{position:relative}#dropzone>span,#dropzone>b{pointer-events:none}#dropFileInput{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0;opacity:0;cursor:pointer;z-index:1}#dropzone:focus-within{outline:2px solid var(--teal);outline-offset:3px}

@@ -121,13 +121,17 @@ async function processPhotoFiles(files,source){
  return {added,failed:errors.length,received:files.length};
 }
 function renderPhotos(){$('#photoCount').textContent=photos.length;$('#dropzone').style.minHeight=photos.length?'85px':'126px';$('#photoList').replaceChildren();photos.forEach((p,i)=>{let card=document.createElement('div');card.className='photocard';let im=document.createElement('img');im.src=p.data;im.alt=p.name;let t=document.createElement('div');t.className='name';t.textContent=`${i+1}. ${p.name}`;t.title=p.name;let actions=document.createElement('div');actions.className='actions';for(let [label,title,fn,disabled] of [['←','앞으로',()=>{[photos[i-1],photos[i]]=[photos[i],photos[i-1]]},i===0],['→','뒤로',()=>{[photos[i+1],photos[i]]=[photos[i],photos[i+1]]},i===photos.length-1],['×','삭제',()=>photos.splice(i,1),false]]){let b=document.createElement('button');b.textContent=label;b.title=title;b.disabled=disabled;b.onclick=()=>{fn();renderPhotos();render()};actions.append(b)}card.append(im,t,actions);$('#photoList').append(card)})}
-$('#addPhotos').onclick=$('#dropzone').onclick=()=>$('#fileInput').click();
+$('#addPhotos').onclick=()=>$('#fileInput').click();
+// Let the browser populate the native multiple-file input on drops in this area.
+$('#dropFileInput').onchange=ev=>{const files=Array.from(ev.target.files||[]);ev.target.value='';addFiles(files,'직접 등록')};
 $('#fileInput').onchange=ev=>{const files=Array.from(ev.target.files||[]);ev.target.value='';addFiles(files,'파일 선택')};
 $('#clearPhotos').onclick=async()=>{await uploadQueue;photos=[];page=0;mode='edit';$('#uploadStatus').textContent='';$('#uploadFailures').replaceChildren();renderPhotos();render()};
 function isFileDrag(ev){return Array.from(ev.dataTransfer?.types||[]).includes('Files')||Array.from(ev.dataTransfer?.items||[]).some(item=>item.kind==='file')}
-document.addEventListener('dragover',ev=>{if(!isFileDrag(ev))return;ev.preventDefault();ev.dataTransfer.dropEffect='copy';$('#dropzone').classList.add('over')});
+document.addEventListener('dragover',ev=>{if(!isFileDrag(ev))return;$('#dropzone').classList.add('over');if(ev.target===$('#dropFileInput'))return;ev.preventDefault();ev.dataTransfer.dropEffect='copy'});
 document.addEventListener('dragleave',ev=>{if(!ev.relatedTarget)$('#dropzone').classList.remove('over')});
 document.addEventListener('drop',ev=>{
+ $('#dropzone').classList.remove('over');
+ if(ev.target===$('#dropFileInput'))return;
  if(!isFileDrag(ev)&&!ev.dataTransfer?.files?.length)return;
  ev.preventDefault();$('#dropzone').classList.remove('over');const files=snapshotDroppedFiles(ev.dataTransfer);addFiles(files,'드래그 등록');
 });
