@@ -1,5 +1,5 @@
 'use strict';
-const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)], uid=()=>crypto.randomUUID();
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)], uid=()=>crypto.randomUUID?.()||'pd-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
 let state={ratio:'wide',bg:'#ffffff',elements:[]}, photos=[],selected=null,mode='edit',page=0,showGrid=true,history=[],future=[];
 const ratios={wide:[13.333333,7.5],standard:[10,7.5],portrait:[8.2677,11.6929],landscape:[297/25.4,210/25.4]}, names={image:'고정 이미지',photo:'사진 영역',text:'텍스트',rect:'사각형',ellipse:'원',line:'직선',arrow:'화살표'}, icons={image:'▣',photo:'▧',text:'T',rect:'□',ellipse:'○',line:'╱',arrow:'↗'};
 const presets=[{n:1,label:'1장',cols:1},{n:2,label:'2장',cols:2},{n:3,label:'3장',cols:3},{n:4,label:'4장',cols:2},{n:6,label:'6장',cols:3},{n:0,label:'빈 페이지',cols:1}];
@@ -80,9 +80,57 @@ async function readFixedImage(file){
 }
 $('#fixedImageInput').onchange=async ev=>{const file=ev.target.files[0],target=imageReplaceId;ev.target.value='';if(!file)return;try{const image=await readFixedImage(file);let e=target?state.elements.find(e=>e.id===target):null;if(target&&!e)return;checkpoint();if(e){Object.assign(e,image)}else{const [W,H]=ratios[state.ratio],w=20,h=Math.min(40,w*W/H*image.height/image.width);e={...elem('image',6,5,w,h),...image,fit:'contain'};state.elements.push(e)}selected=e.id;mode='edit';render();toast(target?'고정 이미지를 교체했습니다.':'고정 이미지를 추가했습니다. 모든 슬라이드에 반복됩니다.')}catch(e){toast(e.message||'이미지를 읽을 수 없습니다.')}};
 
-async function addFiles(files){const pendingFiles=Array.from(files||[]);let added=0,failed=0;for(let f of pendingFiles){if(!/^image\/(jpeg|png|webp|gif)$/.test(f.type)){failed++;continue}try{const bitmap=await createImageBitmap(f),scale=Math.min(1,2560/Math.max(bitmap.width,bitmap.height)),canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);photos.push({id:uid(),name:f.name,data:canvas.toDataURL('image/png'),width:canvas.width,height:canvas.height});bitmap.close();added++}catch{failed++}}renderPhotos();render();if(failed)toast(`${added}장 추가 · ${failed}개 파일은 지원하지 않거나 읽을 수 없습니다.`);else if(added)toast(`사진 ${added}장을 추가했습니다.`);return {added,failed}}
+const rasterExtensions=/\.(jpe?g|jfif|png|apng|webp|gif|bmp|avif|heic|heif)$/i;
+let uploadQueue=Promise.resolve();
+function snapshotDroppedFiles(transfer){
+ const listed=Array.from(transfer?.files||[]),items=Array.from(transfer?.items||[]).filter(item=>item.kind==='file').map(item=>item.getAsFile()).filter(Boolean);
+ return items.length>listed.length?items:listed;
+}
+function addFiles(files,source='사진 추가'){
+ const pendingFiles=Array.from(files||[]);
+ const task=uploadQueue.then(()=>processPhotoFiles(pendingFiles,source));uploadQueue=task.catch(()=>{});return task;
+}
+async function decodePhoto(file){
+ if(typeof createImageBitmap==='function'){try{return await createImageBitmap(file)}catch{}}
+ const url=URL.createObjectURL(file),img=new Image();
+ try{await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=()=>reject(Error('이미지를 해석할 수 없습니다. JPG 또는 PNG로 변환해 주세요.'));img.src=url});return {width:img.naturalWidth,height:img.naturalHeight,image:img,close(){URL.revokeObjectURL(url)}}}catch(err){URL.revokeObjectURL(url);throw err}
+}
+async function processPhotoFiles(files,source){
+ const report=$('#uploadStatus'),failures=$('#uploadFailures');failures.replaceChildren();
+ let added=0;const errors=[];
+ const progress=done=>{report.textContent=`${source}: 전달 ${files.length}개 · 처리 ${done}/${files.length} · 등록 ${added}장 · 실패 ${errors.length}개`;$('#photoCount').textContent=photos.length};
+ if(!files.length){report.textContent='전달된 파일이 없습니다. 폴더 안의 사진 파일을 직접 선택해 주세요.';return {added:0,failed:0,received:0}}
+ progress(0);
+ for(let i=0;i<files.length;i++){
+  const f=files[i];let bitmap;
+  try{
+   if(!/^image\//i.test(f.type||'')&&!rasterExtensions.test(f.name||''))throw Error('사진 파일이 아닙니다.');
+   bitmap=await decodePhoto(f);if(!bitmap.width||!bitmap.height)throw Error('사진 크기를 읽을 수 없습니다.');
+   const scale=Math.min(1,2560/Math.max(bitmap.width,bitmap.height)),canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));
+   const ctx=canvas.getContext('2d');if(!ctx)throw Error('이미지 처리 공간이 부족합니다.');ctx.drawImage(bitmap.image||bitmap,0,0,canvas.width,canvas.height);
+   const jpeg=/image\/(jpeg|pjpeg)/i.test(f.type||'')||/\.(jpe?g|jfif)$/i.test(f.name||''),data=canvas.toDataURL(jpeg?'image/jpeg':'image/png',.92);
+   if(!data.startsWith('data:image/'))throw Error('이미지 변환에 실패했습니다.');
+   photos.push({id:uid(),name:f.name||`붙여넣은 사진 ${photos.length+1}.png`,data,width:canvas.width,height:canvas.height});added++;
+  }catch(err){errors.push({name:f.name||'이름 없는 파일',message:/\.(heic|heif)$/i.test(f.name||'')?'이 브라우저에서 지원하지 않는 형식입니다. JPG 또는 PNG로 변환해 주세요.':err.message||'사진을 읽을 수 없습니다.'})}
+  finally{bitmap?.close?.()}
+  progress(i+1);
+ }
+ for(const err of errors){const li=document.createElement('li');li.textContent=`${err.name}: ${err.message}`;failures.append(li)}
+ renderPhotos();render();progress(files.length);
+ toast(`전달 ${files.length}개 · 사진 ${added}장 추가${errors.length?' · 실패 '+errors.length+'개 (아래 사유 확인)':''}`);
+ return {added,failed:errors.length,received:files.length};
+}
 function renderPhotos(){$('#photoCount').textContent=photos.length;$('#dropzone').style.minHeight=photos.length?'85px':'126px';$('#photoList').replaceChildren();photos.forEach((p,i)=>{let card=document.createElement('div');card.className='photocard';let im=document.createElement('img');im.src=p.data;im.alt=p.name;let t=document.createElement('div');t.className='name';t.textContent=`${i+1}. ${p.name}`;t.title=p.name;let actions=document.createElement('div');actions.className='actions';for(let [label,title,fn,disabled] of [['←','앞으로',()=>{[photos[i-1],photos[i]]=[photos[i],photos[i-1]]},i===0],['→','뒤로',()=>{[photos[i+1],photos[i]]=[photos[i],photos[i+1]]},i===photos.length-1],['×','삭제',()=>photos.splice(i,1),false]]){let b=document.createElement('button');b.textContent=label;b.title=title;b.disabled=disabled;b.onclick=()=>{fn();renderPhotos();render()};actions.append(b)}card.append(im,t,actions);$('#photoList').append(card)})}
-$('#addPhotos').onclick=$('#dropzone').onclick=()=>$('#fileInput').click();$('#fileInput').onchange=async ev=>{await addFiles(ev.target.files);ev.target.value=''};$('#clearPhotos').onclick=()=>{photos=[];page=0;mode='edit';renderPhotos();render()};for(let type of ['dragenter','dragover'])$('#dropzone').addEventListener(type,ev=>{ev.preventDefault();$('#dropzone').classList.add('over')});$('#dropzone').ondragleave=()=>$('#dropzone').classList.remove('over');$('#dropzone').ondrop=ev=>{ev.preventDefault();$('#dropzone').classList.remove('over');addFiles(Array.from(ev.dataTransfer.files||[]))};
+$('#addPhotos').onclick=$('#dropzone').onclick=()=>$('#fileInput').click();
+$('#fileInput').onchange=ev=>{const files=Array.from(ev.target.files||[]);ev.target.value='';addFiles(files,'파일 선택')};
+$('#clearPhotos').onclick=async()=>{await uploadQueue;photos=[];page=0;mode='edit';$('#uploadStatus').textContent='';$('#uploadFailures').replaceChildren();renderPhotos();render()};
+function isFileDrag(ev){return Array.from(ev.dataTransfer?.types||[]).includes('Files')||Array.from(ev.dataTransfer?.items||[]).some(item=>item.kind==='file')}
+document.addEventListener('dragover',ev=>{if(!isFileDrag(ev))return;ev.preventDefault();ev.dataTransfer.dropEffect='copy';$('#dropzone').classList.add('over')});
+document.addEventListener('dragleave',ev=>{if(!ev.relatedTarget)$('#dropzone').classList.remove('over')});
+document.addEventListener('drop',ev=>{
+ if(!isFileDrag(ev)&&!ev.dataTransfer?.files?.length)return;
+ ev.preventDefault();$('#dropzone').classList.remove('over');const files=snapshotDroppedFiles(ev.dataTransfer);addFiles(files,'드래그 등록');
+});
 
 async function handleImagePaste(ev){
  const target=ev.target;
@@ -102,3 +150,4 @@ $('#layoutInput').onchange=async ev=>{try{let obj=validateLayout(JSON.parse(awai
 async function createDeck(){if(!photos.length)throw Error('사진을 먼저 추가하세요.');if(!slots().length)throw Error('사진 영역을 하나 이상 추가하세요.');if(!window.PptxGenJS)throw Error('PPT 생성 기능을 불러오지 못했습니다. 새로고침해 주세요.');const ppt=new PptxGenJS(),[W,H]=ratios[state.ratio];ppt.defineLayout({name:'CUSTOM',width:W,height:H});ppt.layout='CUSTOM';ppt.author='PhotoDeck';ppt.subject='사진 자동 배치';ppt.title=$('#filename').value||'사진 모음';ppt.lang='ko-KR';for(let p=0;p<pages();p++){let slide=ppt.addSlide();slide.background={color:state.bg.slice(1)};let si=0;for(let e of state.elements){let x=e.x*W/100,y=e.y*H/100,w=e.w*W/100,h=e.h*H/100,rotate=e.rotation;if(['photo','image'].includes(e.type)){let photo=e.type==='image'?e:photos[p*slots().length+si++];if(!photo)continue;let scale=(e.fit==='contain'?Math.min:Math.max)(w/photo.width,h/photo.height),pw=photo.width*scale,ph=photo.height*scale;let size=e.fit==='contain'?{x:x+(w-pw)/2,y:y+(h-ph)/2,w:pw,h:ph}:{x,y,w:pw,h:ph,sizing:{type:'crop',x:(pw-w)/2,y:(ph-h)/2,w,h}};slide.addImage({data:photo.data,...size,rotate})}else if(e.type==='text'){slide.addText(e.text.replaceAll('{page}',p+1),{x,y,w,h,fontFace:'맑은 고딕',fontSize:e.fontSize,color:e.color.slice(1),bold:e.bold,align:e.align,margin:0,breakLine:false,rotate,valign:'mid',fit:'resize'})}else if(['rect','ellipse'].includes(e.type)){slide.addShape(e.type==='ellipse'?ppt.ShapeType.ellipse:ppt.ShapeType.rect,{x,y,w,h,rotate,fill:{color:e.fill.slice(1),transparency:e.fillNone?100:0},line:{color:e.stroke.slice(1),width:e.strokeWidth,transparency:e.strokeNone||e.strokeWidth===0?100:0}})}else{slide.addShape(ppt.ShapeType.line,{x,y:y+h/2,w,h:0,rotate,line:{color:e.stroke.slice(1),width:e.strokeWidth,transparency:e.strokeNone||e.strokeWidth===0?100:0,beginArrowType:'none',endArrowType:e.type==='arrow'?'triangle':'none'}})}}}return ppt}
 $('#download').onclick=async()=>{let b=$('#download');b.disabled=true;b.textContent='PPT 생성 중…';try{let ppt=await createDeck();await ppt.writeFile({fileName:($('#filename').value.trim()||'사진 모음').replace(/[\\/:*?"<>|]/g,'_')+'.pptx'});toast(`${pages()}페이지의 PPT를 다운로드했습니다.`)}catch(e){toast(e.message||'파일 생성 중 오류가 발생했습니다.')}finally{b.disabled=false;b.textContent='PPTX 다운로드 ↗'}};
 window.addEventListener('resize',()=>renderCanvas());try{let saved=localStorage.getItem('photodeck-layout-v1');if(saved)state=validateLayout({app:'photodeck',version:1,layout:JSON.parse(saved)});else applyPreset(2,false)}catch{applyPreset(2,false)}render();window.PhotoDeck={createDeck,getState:()=>state,getPhotos:()=>photos,pages};
+
